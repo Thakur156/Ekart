@@ -1,63 +1,83 @@
 pipeline {
     agent any
-    tools{
-        jdk  'jdk11'
-        maven  'maven3'
+    
+    tools {
+        jdk 'jdk17'
+        maven 'maven3.6'
     }
     
-    environment{
-        SCANNER_HOME= tool 'sonar-scanner'
+    environment {
+        SCANNER_HOME = tool 'sonar-scanner'
     }
-    
+
     stages {
-        stage('Git Checkout') {
+        stage('git checkout') {
             steps {
-                git branch: 'main', changelog: false, credentialsId: '15fb69c3-3460-4d51-bd07-2b0545fa5151', poll: false, url: 'https://github.com/jaiswaladi246/Shopping-Cart.git'
+                git branch: 'main', url: 'https://github.com/Thakur156/Ekart'
             }
         }
         
-        stage('COMPILE') {
+        stage('compile') {
             steps {
-                sh "mvn clean compile -DskipTests=true"
-            }
-        }
-        
-        stage('OWASP Scan') {
-            steps {
-                dependencyCheck additionalArguments: '--scan ./ ', odcInstallation: 'DP'
-                dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
-            }
-        }
-        
-        stage('Sonarqube') {
-            steps {
-                withSonarQubeEnv('sonar-server'){
-                   sh ''' $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=Shopping-Cart \
-                   -Dsonar.java.binaries=. \
-                   -Dsonar.projectKey=Shopping-Cart '''
-               }
+                sh "mvn compile"
             }
         }
         
         stage('Build') {
             steps {
-                sh "mvn clean package -DskipTests=true"
+                sh "mvn package -DskipTests=true"
             }
         }
         
-        stage('Docker Build & Push') {
+        stage('OWASP Scan') {
             steps {
-                script{
-                    withDockerRegistry(credentialsId: '2fe19d8a-3d12-4b82-ba20-9d22e6bf1672', toolName: 'docker') {
-                        
-                        sh "docker build -t shopping-cart -f docker/Dockerfile ."
-                        sh "docker tag  shopping-cart adijaiswal/shopping-cart:latest"
-                        sh "docker push adijaiswal/shopping-cart:latest"
-                    }
+                dependencyCheck additionalArguments: '--scan ./ ', odcInstallation: 'DC'
+                dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
+            }
+        }
+        
+        stage('Trivy') {
+            steps {
+                sh "trivy fs ."
+            }
+        }
+        
+        stage('SONARQUBE ANALYSIS') {
+            steps {
+                withSonarQubeEnv('sonar') {
+                    sh """$SCANNER_HOME/bin/sonar-scanner \
+                        -Dsonar.projectName=Shopping-Cart \
+                        -Dsonar.java.binaries=/var/lib/jenkins/workspace/E-kart/target/classes/com \
+                        -Dsonar.projectKey=Shopping-Cart
+                    """
                 }
             }
         }
         
+        stage('Deploy to Nexus') {
+            steps {
+                withMaven(globalMavenSettingsConfig: 'global-setting') {
+                    sh "mvn deploy -DskipTests=True"
+                }
+            }
+        }
         
+        stage('Build and push Docker Image') {
+            steps {
+                withDockerRegistry(credentialsId: 'docker-cred', url: 'https://index.docker.io/v1/') {
+                    sh "docker build -t shopping-cart -f docker/Dockerfile ."
+                    sh "docker tag shopping-cart thakur156/shopping-cart:latest"
+                    sh "docker push thakur156/shopping-cart:latest"
+                }
+            }
+        }
+        
+        stage('Run Container') {
+            steps {
+                withDockerRegistry(credentialsId: 'docker-cred', url: 'https://index.docker.io/v1/') {
+                    sh "docker run -d --name ekart -p 8070:8070 thakur156/shopping-cart:latest "
+                }
+            }
+        }
     }
 }
